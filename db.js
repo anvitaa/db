@@ -5,9 +5,10 @@ const log = bunyan.createLogger({name: "yd-internal-api"})
 const request = require('superagent');
 const cheerio = require('cheerio')
 const lda = require('lda')
-const article_parser = require('article-parser')
+const article_extractor = require('article-extractor')
 const fetch = require('node-fetch')
-
+const qs = require('querystring')
+const http = require('http')
 const rake = require('node-rake')
 log.info('connecting to db host:', process.env.DB_HOST)
 
@@ -295,14 +296,41 @@ function* getBoardCommentText(boardId) {
       .from('comments')
       .where('deleted', 0)
       .whereIn('pin_id', pin_id)
-    if (pin_comments.length > 0) raw_comments[pin_id] = _.map(pin_comments, 'body')
+
+    raw_comments[pin_id] = {}
+    if (pin_comments.length > 0) {
+      raw_comments[pin_id].comments = _.map(pin_comments, 'body')
+      raw_comments[pin_id].comments = _.map(raw_comments[pin_id].comments, (html_comment)=>{
+        return cheerio.load(html_comment).text()
+      })
+      var to_analyse = _.join(raw_comments[pin_id].comments, ',')
+      raw_comments[pin_id].lda_analysis = lda(to_analyse.match(/[^\.!\?]+[\.!\?]+/g), 2, 5)
+      try {
+        raw_comments[pin_id].rake_analysis = rake.generate(to_analyse)
+      } catch(err){
+        console.log(pin_id+" "+err)
+      }
+
+    }  
   }
   return raw_comments
   
 }
 
 
+function* test(){
 
+  var x = new Promise(function(resolve, reject) {
+    article_extractor.extractData("https://www.nytimes.com/2017/06/13/us/politics/jeff-sessions-testimony.html",
+    function(err, data) {
+      console.log(data)
+      return data
+    })
+
+  })  
+  return x
+
+}
 
 
 
@@ -315,14 +343,21 @@ function* getBoardContentText(boardId) {
 
   //only get relevant text - parse html stuff out
   function parse(board_content) {
-    board_content.text = cheerio.load(board_content.raw_html).text()
+
+    try {
+    console.log('try to parse')  
+    board_content.article_content = cheerio.load(board_content.raw_html).text()
+    }
+    catch(err) {
+      console.log(err)
+    }
     // console.log('parse' + board_content.pin_id)
     return board_content
   }
   function text_anal(board_content) {
-    console.log('text_anal' + board_content.article_content)
+    // console.log('text_anal' + board_content.article_content)
     board_content.lda_analysis = lda(board_content.article_content.match(/[^\.!\?]+[\.!\?]+/g), 2, 5)
-    console.log(board_content.article_content)
+    // console.log(board_content.article_content)
      try {
       board_content.rake_analysis = rake.generate(board_content.article_content)
     } catch(err){
@@ -347,32 +382,41 @@ function* getBoardContentText(boardId) {
     board_content.pin_id = pin_id
 
     //if there is a url provided, scrape its content
-    if(board_content.url_web) {
+    if(board_content.url_web && !_.startsWith(board_content.url_web, 'https://www.nytimes')) { 
       //scrape content from link 
 
       var content = new Promise(function(resolve, reject) {
         var x = board_content
-        article_parser.extract(x.url_web).then((article) => {
-          x.author = article.author
-          x.source = article.source
-          x.actual_title = article.title
-          x.description = article.description
-          fetch(x.url_web).then((article) => {
-            return article.text()
-          }).then((html) => {
-              return [article_parser.parseMeta(html, x.url_web), article_parser.getArticle(html)]
-              x.article_content = ;
-
-              resolve(x)
-          })
-
-
+        console.log(x.url_web)
+        
+        article_extractor.extractData(x.url_web, function(err, data) {
+          if(err) {console.log(err)}
+          x.raw_html = data.content
+          resolve(x)
         })
+     
+     
+       
       })
+
+
+
+
+      //   .then((article) => {
+      //     // console.log(article)
+      //     x.author = article.author
+      //     x.source = article.source
+      //     x.actual_title = article.title
+      //     x.description = article.description
+      //     x.raw_html = article.content
+      //     resolve(x)
+      //   })
+      // })
+
 
        
 
-      // var parsed_text = content.then(parse)
+      var parsed_text = content.then(parse)
 
       //nlp analysis on content
 
@@ -415,6 +459,7 @@ module.exports = {
   getUserById,
   isBoardOwner,
   knex,
+  test,
   getBoardCommentText,
   getBoardContentText,
   lookupUserByToken
