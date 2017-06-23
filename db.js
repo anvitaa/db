@@ -1,31 +1,31 @@
-
 const _ = require('lodash')
 const bunyan = require('bunyan')
-const log = bunyan.createLogger({name: "yd-internal-api"})
-const request = require('superagent');
+const log = bunyan.createLogger({
+  name: "yd-internal-api"
+})
+const request = require('request');
 const cheerio = require('cheerio')
+const promise_limit = require('promise-limit')
 const lda = require('lda')
 const article_extractor = require('article-extractor')
 const fetch = require('node-fetch')
-const qs = require('querystring')
-const http = require('http')
 const rake = require('node-rake')
+
+
 log.info('connecting to db host:', process.env.DB_HOST)
 
 const knex = require('knex')({
-	client: 'mysql',
-	connection: {
-		host     : process.env.DB_HOST,
-		user     : process.env.DB_USER,
-		password : process.env.DB_PASS,
-		database : process.env.DB_NAME
-	}
+  client: 'mysql',
+  connection: {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASS,
+    database: process.env.DB_NAME
+  }
 })
 
 
 // log.info([1,2,3])
-
-
 
 
 var comments = getBoardCommentText()
@@ -94,11 +94,11 @@ function* getBoardStatsFollowedBy(userId) {
   return withStats
 }
 
-function* getBoardAdmins(boardId){
-    return knex.select('user_id')
-        .from('board_admins')
-        .where('board_id', boardId)
-        .where('status', 1)
+function* getBoardAdmins(boardId) {
+  return knex.select('user_id')
+    .from('board_admins')
+    .where('board_id', boardId)
+    .where('status', 1)
 }
 
 function* addBoardStats(board, userId) {
@@ -107,16 +107,16 @@ function* addBoardStats(board, userId) {
 
   let avg = _.sum(points.map(x => x.total)) / points.length
 
-  let usersPoints = points.filter(x => x.user_id == userId) 
+  let usersPoints = points.filter(x => x.user_id == userId)
 
   let admins = yield getBoardAdmins(board.board_id)
-    
+
   if (!usersPoints.length) {
     return _.merge(board, {
       board_admins: admins,
-      users_points: 0, 
+      users_points: 0,
       followers: points.length,
-      percentile: 0, 
+      percentile: 0,
       avg: Math.floor(avg)
     })
   }
@@ -285,11 +285,12 @@ function* getInteractionsOnBoard(boardId) {
   let together = Array.prototype.concat.apply([], collections.concat(pinIdsOnBoard))
   return together
 }
+
 function* getBoardCommentText(boardId) {
 
   let pinIdsOnBoard = yield getPinIdsOnBoard(boardId)
   let raw_comments = {}
-  for(var i = 0; i < pinIdsOnBoard.length; i++) {
+  for (var i = 0; i < pinIdsOnBoard.length; i++) {
     var pin_id = pinIdsOnBoard[i].id
     let pin_comments = yield knex
       .select('body')
@@ -300,149 +301,262 @@ function* getBoardCommentText(boardId) {
     raw_comments[pin_id] = {}
     if (pin_comments.length > 0) {
       raw_comments[pin_id].comments = _.map(pin_comments, 'body')
-      raw_comments[pin_id].comments = _.map(raw_comments[pin_id].comments, (html_comment)=>{
+      raw_comments[pin_id].comments = _.map(raw_comments[pin_id].comments, (html_comment) => {
         return cheerio.load(html_comment).text()
       })
       var to_analyse = _.join(raw_comments[pin_id].comments, ',')
       raw_comments[pin_id].lda_analysis = lda(to_analyse.match(/[^\.!\?]+[\.!\?]+/g), 2, 5)
       try {
         raw_comments[pin_id].rake_analysis = rake.generate(to_analyse)
-      } catch(err){
-        console.log(pin_id+" "+err)
+      } catch (err) {
+        console.log(pin_id + " " + err)
       }
 
-    }  
+    }
   }
   return raw_comments
-  
-}
-
-
-function* test(){
-
-  var x = new Promise(function(resolve, reject) {
-    article_extractor.extractData("https://www.nytimes.com/2017/06/13/us/politics/jeff-sessions-testimony.html",
-    function(err, data) {
-      console.log(data)
-      return data
-    })
-
-  })  
-  return x
 
 }
 
 
 
-// old
-function* getBoardContentText(boardId) {
-  let pinIdsOnBoard = yield getPinIdsOnBoard(boardId)
-  var promises = []; 
+function* test() {
 
+  // var x = new Promise(function(resolve, reject) {
+  //   article_extractor.extractData("https://www.nytimes.com/2017/06/13/us/politics/jeff-sessions-testimony.html",
+  //   function(err, data) {
+  //     console.log(data)
+  //     return data
+  //   })
 
+  // })  
+  // return x
+  var wordmap = {}
+  var comparr = new Set()
+    // var artisticarr = []
+    // var edarr = []
+    // var govarr =[]
+    // var instarr =[]
+    // var intllarr = []
+    // var militaryarr = []
+    // var poliarr = []
+    // var publicinst = []
+    // var relarr = []
+    // var sports = []
+    // var stock = []
+    // var terrarr = []
 
-  //only get relevant text - parse html stuff out
-  function parse(board_content) {
+  // var location = []
+  // var product = []
 
-    try {
-    console.log('try to parse')  
-    board_content.article_content = cheerio.load(board_content.raw_html).text()
-    }
-    catch(err) {
-      console.log(err)
-    }
-    // console.log('parse' + board_content.pin_id)
-    return board_content
-  }
-  function text_anal(board_content) {
-    // console.log('text_anal' + board_content.article_content)
-    board_content.lda_analysis = lda(board_content.article_content.match(/[^\.!\?]+[\.!\?]+/g), 2, 5)
-    // console.log(board_content.article_content)
-     try {
-      board_content.rake_analysis = rake.generate(board_content.article_content)
-    } catch(err){
-      console.log(board_content.pin_id+" "+err)
-    }
-    return board_content
-    
-  }
- 
-  
-  //queries database to get pin information for all pins on a board
- 
-  for(var i = 0; i < pinIdsOnBoard.length; i++) {
-    var pin_id = pinIdsOnBoard[i].id
-    let pin_content = yield knex
-      .select('title', 'user_note', 'body', 'url_web')
+  //  iterate through entity list
+  for (var i = 0; i < anvita.length; i++) {
+    var pin = anvita[i]
+    pin.time = yield knex
+      .select('created_at')
       .from('pins')
       .where('deleted', 0)
-      .whereIn('id', pin_id)
-    
-    var board_content = pin_content[0]
-    board_content.pin_id = pin_id
-
-    //if there is a url provided, scrape its content
-    if(board_content.url_web && !_.startsWith(board_content.url_web, 'https://www.nytimes')) { 
-      //scrape content from link 
-
-      var content = new Promise(function(resolve, reject) {
-        var x = board_content
-        console.log(x.url_web)
-        
-        article_extractor.extractData(x.url_web, function(err, data) {
-          if(err) {console.log(err)}
-          x.raw_html = data.content
-          resolve(x)
-        })
-     
-     
-       
-      })
-
+      .where('id', pin.pin_id)
+    time = pin.time[0].created_at
+    for (var j = 0; j < pin.analy.entity_list.length; j++) {
+      var entity = pin.analy.entity_list[j]
+      var wordstoadd = []
+      wordstoadd.push(entity.form)
+      var typewords = _.split(entity.sementity.type, '>')
+      for (var k = 0; k < typewords.length; k++) {
+        wordstoadd.push(typewords[k])
+      }
+      for (var l = 0; l < wordstoadd.length; l++) {
+        if (wordmap[wordstoadd[l]]) {
+          if (wordmap[wordstoadd[l]][time]) {
+            wordmap[wordstoadd[l]][time] = wordmap[wordstoadd[l]][time] + parseInt(entity.relevance)
+          } else {
+            wordmap[wordstoadd[l]][time] = parseInt(entity.relevance)
+          }
+        } else {
+          wordmap[wordstoadd[l]] = {}
+          wordmap[wordstoadd[l]][time] = parseInt(entity.relevance)
+        }
 
 
+      }
 
-      //   .then((article) => {
-      //     // console.log(article)
-      //     x.author = article.author
-      //     x.source = article.source
-      //     x.actual_title = article.title
-      //     x.description = article.description
-      //     x.raw_html = article.content
-      //     resolve(x)
-      //   })
-      // })
+      if (_.startsWith(entity.sementity.type, 'Top>Organization>Company')) {
+        comparr.add(entity.form)
+      }
 
-
-       
-
-      var parsed_text = content.then(parse)
-
-      //nlp analysis on content
-
-      var anal = content.then(text_anal)
-
-      //return object 
-      
-      promises.push(anal)
-    
-    }
-    else {
-      promises.push(board_content)
     }
 
   }
-  // console.log(promises)
+  return [wordmap, comparr]
 
-  return Promise.all(promises).then(function(data_arr) {
-    // console.log("uh oh")
-    return data_arr
+}
+
+
+//only get relevant text - parse html stuff out
+function parse(board_content) {
+
+  try {
+    console.log('try to parse')
+    board_content.article_content = board_content.article_content + board_content.title + " " + board_content.user_note + " " + board_content.body + " " + cheerio.load(board_content.raw_html).text()
+  } catch (err) {
+    console.log(err)
+  }
+  // console.log('parse' + board_content.pin_id)
+  return board_content
+}
+
+function text_anal(board_content) {
+  board_content.lda_analysis = lda(board_content.article_content.match(/[^\.!\?]+[\.!\?]+/g), 1, 2)
+  try {
+    board_content.rake_analysis = rake.generate(board_content.article_content).slice(0, 10)
+  } catch (err) {
+    console.log(board_content.pin_id + " " + err)
+  }
+  return board_content
+
+}
+
+
+
+function meaning_cloud(pinstuff) {
+
+  var type = pinstuff[0]
+  var pin = pinstuff[1]
+
+  return new Promise((resolve, reject) => {
+
+    var options = {
+      method: 'POST',
+      url: 'http://api.meaningcloud.com/topics-2.0',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded'
+      },
+      form: {
+        key: '71ce4f9e09d44e8fffe65477852af009',
+        lang: 'en',
+        txt: (type == 'user') ? pin.user_content : (type== "url") ? pin.url_content: null,
+        tt: 'ec'
+      }
+    }
+
+
+    request(options, function(error, response, body) {
+      if (error) reject(error)
+      body = JSON.parse(body)
+        // console.log(body)
+      if (parseInt(body.status.code) == 0) {
+
+        function parse_entity_concept(entity) {
+          var x = {}
+          x[entity.form] = entity.relevance
+          var rel = entity.relevance / 1.1
+          _.forEach(_.tail(_.split(entity.sementity.type, '>')), (sem_part) => {
+            rel = rel * 1.1
+            x[sem_part] = rel
+          })
+          return x
+        }
+        if (type == "user") {
+          pin.user_content_anal = {
+            entities: body.entity_list.map(parse_entity_concept),
+            concepts: body.concept_list.map(parse_entity_concept)
+          }
+        }
+        if (type == "url") {
+          pin.url_content_anal = {
+            entities: body.entity_list.map(parse_entity_concept),
+            concepts: body.concept_list.map(parse_entity_concept)
+          }
+        }
+
+      }
+
+      resolve(pin)
+    })
   })
 }
 
 
+function* getBoardContentText(boardId) {
+  let pin_db = yield knex
+    .select('id', 'title', 'user_note', 'body', 'url_web', 'created_at')
+    .from('pins')
+    .where('deleted', 0)
+    .whereIn('board_id', boardId)
+    .map((pin) => {
+      pin.user_content = pin.title + " " + pin.user_note + " " + pin.body
+      delete pin.user_note
+      delete pin.title
+      delete pin.body
+      return pin
+    })
+  let pin_comments = yield knex
+    .select('body', 'user_id', 'created_at')
+    .from('comments')
+    .where('deleted', 0)
+    .whereIn('pin_id', pin_db.map((pin) => {
+      return pin.id
+    }))
+
+  let url_scrape = (pins) => {
+    var promise_array = []
+    _.forEach(pins, (pin) => {
+
+      if (pin.url_web) {
+        var content = new Promise((resolve, reject) => {
+          article_extractor.extractData(pin.url_web, (err, res) => {
+            if (err) console.log(err)
+            pin.url_content = res.content
+            resolve(pin.url_content)
+          })
+        })
+        promise_array.push(content)
+      }
+
+    })
+    return Promise.all(promise_array).then((value) => {
+      return pins
+    })
+
+  }
+  let loops = (pins) => {
+    // console.log(pins)
+    return new Promise((resolve, reject) => {
+
+      let results = [],
+        proc
+      var pin_content_q = []
+      let wrapper = () => {
+        if (!pins.length && !pin_content_q.length) {
+          clearInterval(proc)
+          resolve(results)
+        }
+
+        if (!pin_content_q.length && pins.length) {
+          var pin = pins.shift()
+          if(pin.url_web) {pin_content_q.push('url')}
+          pin_content_q.push('user')
+        }
+        meaning_cloud([pin_content_q.shift(), pin]).then(res => {
+
+          results.push(res)
+        })
+      }
+      proc = setInterval(wrapper, 1000)
+
+    })
+
+  }
+  return url_scrape(pin_db).then(loops)
+    // Promise.all()
+
+
+}
+
+
 module.exports = {
-	getBoardStatsOwnedOrAdminBy,
+  getBoardStatsOwnedOrAdminBy,
   getAllPointsOnBoard,
   getBoardFollowers,
   getBoardStatsFollowedBy,
@@ -464,4 +578,3 @@ module.exports = {
   getBoardContentText,
   lookupUserByToken
 }
-
